@@ -81,6 +81,7 @@
     <CudaCompile Include="Matrix1.cu" />
     <CudaCompile Include="Matrix2.cu" />
     <CudaCompile Include="Reduce.cu" />
+    <CudaCompile Include="scan.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
