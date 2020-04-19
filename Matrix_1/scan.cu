@@ -4,7 +4,7 @@
 #include <cuda.h>
 #include <iostream>
 #define BLOCK_SIZE 32
-#define N 1024
+#define N 15360
 // This is the kernal
 __global__ void scanKernal(float* d_I, float* d_O) {
     // The ID for the thread selected (Including block dimensions).
@@ -14,18 +14,18 @@ __global__ void scanKernal(float* d_I, float* d_O) {
     // Creating a shared memory space
     int block = blockDim.x * 1;
     __shared__ float* temp;
-   // printf("wow %i", block);
+    // printf("wow %i", block);
     __syncthreads();
 
     temp = new float[block];
-   // printf("BSize: %i", block);
+    // printf("BSize: %i", block);
     __syncthreads();
 
     // Store the thread id and its value in shared memory. This is because accessing shared memory has a lower latency than global memory.
     temp[threadid] = d_I[globalid];
     // Waiting for threads to complete. [Thread guard]
     __syncthreads();
-   printf("BLOCK DIM: %i", blockDim.x);
+    printf("BLOCK DIM: %i", blockDim.x);
 
     for (int offset = 1; offset < N; offset *= 2) {
         if (threadid >= offset)
@@ -36,12 +36,14 @@ __global__ void scanKernal(float* d_I, float* d_O) {
 }
 
 __global__ void finalScan(float* d_firstScan, float* d_secondScan, float* d_O) {
+    //printf("FINAL SCAN");
     // The ID for the thread selected (Including block dimensions).
     int globalid = blockDim.x * blockIdx.x + threadIdx.x;
     // The thread ID
     int threadid = threadIdx.x;
     // Creating a shared memory space
     int block = blockDim.x * 1;
+    int block_id = blockIdx.x * 1;
     // This shared array stores the second scan. This is will be used to be added onto the final output.
     __shared__ float* addifier;
     // The size of the array is N/BLOCK_SIZE as it is the number of blocks in the grid.
@@ -55,6 +57,8 @@ __global__ void finalScan(float* d_firstScan, float* d_secondScan, float* d_O) {
     // Shared array that stores the first scan results.
     __shared__ float* temp;
     temp = new float[block];
+    __syncthreads();
+
     // Store the thread id and its value in shared memory. This is because accessing shared memory has a lower latency than global memory.
     temp[threadid] = d_firstScan[globalid];
     // Waiting for threads to complete. [Thread guard]
@@ -63,12 +67,16 @@ __global__ void finalScan(float* d_firstScan, float* d_secondScan, float* d_O) {
     // Checking if the block ID is greater than zero as block ID zero must not be modified.
     if (blockIdx.x > 0) {
         // Add the second scan result onto the first scan result.
+
         temp[threadid] = temp[threadid] + addifier[blockIdx.x - 1];
+        printf("\n Hmm %f \n", temp[threadid] );
+
         // Synchornise the threads
         __syncthreads();
     }
     // Write back into global memory
     d_O[globalid] = temp[threadid];
+
 }
 
 void scanMiddle(float* h_input, float* h_output) {
@@ -79,7 +87,7 @@ void scanMiddle(float* h_input, float* h_output) {
 
 
     // Setting up pointers for the device output and input arrays.
-    float* d_input, * d_output, * d_first_output, * d_final_output;
+    float* d_input, * d_output, * d_first_output, * d_final_output, * d_auxillary, * d_auxillary_output;
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
@@ -115,7 +123,8 @@ void scanMiddle(float* h_input, float* h_output) {
     // Copying the first Scan results to the first output
     err = cudaMemcpy(firstScanResults, d_first_output, sizeof(float) * N, cudaMemcpyDeviceToHost);
     // The number of elements in the output array for the second scan. Should be the number of blocks in the grid
-    int output_items_count = (N/BLOCK_SIZE);
+    int output_items_count = (N / BLOCK_SIZE);
+
     // Intalise an array that will store the total of each block.
     float* outputFiltered = new float[output_items_count];
     // This is a counter that will be used to reference the outputFiltered array.
@@ -123,7 +132,7 @@ void scanMiddle(float* h_input, float* h_output) {
     // Here we are looping through all the values at the end of each block and copying it over the outputFiltered array.
     for (int i = 1; i <= output_items_count; i++) {
         // x is the index for the last value in the block.
-        int x = BLOCK_SIZE * i;
+        int x = 32 * i;
         // Copying the value.
         outputFiltered[counter] = firstScanResults[x - 1];
         // Incrementing the counter
@@ -131,10 +140,14 @@ void scanMiddle(float* h_input, float* h_output) {
     }
     // Printing errors.
     printf("\nCOPY FROM GPU %s :\n", cudaGetErrorString(err));
-    cudaFree(d_input);    
+    cudaFree(d_input);
     float* secondScanResults = new float[N / BLOCK_SIZE];
     // Allocating space for the input array in the GPU
     err = cudaMalloc((void**)&d_input, sizeof(float) * output_items_count);
+
+    err = cudaMalloc((void**)&d_input, sizeof(float) * output_items_count);
+
+
     // Printing the error for allocating space.
     printf("CUDA malloc d_input: %s\n", cudaGetErrorString(err));
     // Allocating space for the output array in the GPU
@@ -149,34 +162,79 @@ void scanMiddle(float* h_input, float* h_output) {
     scanKernal << < noBlocks, noThreads >> > (d_input, d_output);
     // Copying the second scan back to the Host.
     err = cudaMemcpy(secondScanResults, d_output, sizeof(float) * output_items_count, cudaMemcpyDeviceToHost);
-    // Freeing the d_input we don't need this again.
-    cudaFree(d_input);
-    // This kernal completes the final mapping
-    finalScan << < noBlocks, noThreads >> > (d_first_output, d_output,d_final_output);
-    // Synchornising.
-    err = cudaDeviceSynchronize();
-    // Copying the final output
-    err = cudaMemcpy(h_output, d_final_output, sizeof(float) * N, cudaMemcpyDeviceToHost);
-    // Printing the output
-    printf("\nFinal OUTPUT\n");
-    for (int i = 0; i < N; i++) {
-        printf("\nFinal OUTPUT [%i] = %f\n", i, h_output[i]);
+
+    float* auxillary_output = new float[N/BLOCK_SIZE];
+
+    int fixing = output_items_count / BLOCK_SIZE;
+    float* fixingArray = new float[fixing];
+
+    printf("Fixing: %i", fixing);
+
+    if (output_items_count > BLOCK_SIZE) {
+        // We must fix this up man.
+        printf("\n Welcome \n");
+        for (int i = 1; i < fixing; i++) {
+            int x = BLOCK_SIZE * i;
+            fixingArray[i] = secondScanResults[x - 1];
+            printf("\nWhats up %f\n", fixingArray[i]);
+        }
+
+        //printf("\n META %f %i \n", secondScanResults[255], fixing);
+        dim3 customBlock((N / BLOCK_SIZE) / BLOCK_SIZE);
+
+
+        cudaMalloc((void**)&d_auxillary, sizeof(float) * fixing);
+        cudaMalloc((void**)&d_auxillary_output, sizeof(float) * fixing);
+        cudaMemcpy(d_auxillary, fixingArray, sizeof(float) * fixing, cudaMemcpyHostToDevice);
+        // Apply scan
+        scanKernal << < noBlocks, noThreads >> > (d_auxillary, d_auxillary_output);
+
+
+
+        //finalScan << < customBlock, noThreads >> > (d_output, d_auxillary, d_auxillary_output);
+
+        cudaDeviceSynchronize();
+
+        cudaMemcpy(auxillary_output, d_auxillary_output, sizeof(float) * fixing, cudaMemcpyDeviceToHost);
+        //cudaMemcpy(d_output, auxillary_output, sizeof(float) * output_items_count, cudaMemcpyDeviceToHost);
+
     }
 
+    // Freeing the d_input we don't need this again.
+    cudaFree(d_input);
 
+    for (int i = 0; i < fixing; i++) {
+        printf("\n %f \n", auxillary_output[i]);
+    }
 
-    cudaEventRecord(stop);
-    cudaEventSynchronize(stop);
-    float milliseconds = 0;
-    cudaEventElapsedTime(&milliseconds, start, stop);
-    printf("Scan N=%i Elapsed time was: %f\n milliseconds", N, milliseconds);
-    //printf("Scan Completed: Element 0: %f", h_output[32]);
-    //printf("\n Reduced Answer: %f\n Real answer: %i", output, N);
+    // This kernal completes the final mapping
+    //finalScan << < noBlocks, noThreads >> > (d_first_output, d_output, d_final_output);
+    // Synchornising.
+    //err = cudaDeviceSynchronize();
+    // Copying the final output E
 
-    // Freeing GPU memory that was allocated to d_input and d_output
-    cudaFree(d_first_output);
-    cudaFree(d_output);
-    cudaFree(d_final_output);
+    /// Error exists here
+   // err = cudaMemcpy(h_output, d_final_output, sizeof(float) * N, cudaMemcpyDeviceToHost);
+    // Printing the output
+    //printf("\nFinal OUTPUT\n");
+    //for (int i = 0; i < N; i++) {
+    //    printf("\nFinal OUTPUT [%i] = %f\n", i, h_output[i]);
+    //}
+
+    //printf("\n Will it work? %f \n ", h_output[N - 1]);
+
+    //cudaEventRecord(stop);
+    //cudaEventSynchronize(stop);
+    //float milliseconds = 0;
+    //cudaEventElapsedTime(&milliseconds, start, stop);
+    //printf("Scan N=%i Elapsed time was: %f\n milliseconds", N, milliseconds);
+    ////printf("Scan Completed: Element 0: %f", h_output[32]);
+    ////printf("\n Reduced Answer: %f\n Real answer: %i", output, N);
+
+    //// Freeing GPU memory that was allocated to d_input and d_output
+    //cudaFree(d_first_output);
+    //cudaFree(d_output);
+    //cudaFree(d_final_output);
 
 
 }

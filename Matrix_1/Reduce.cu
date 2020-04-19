@@ -4,7 +4,7 @@
 #include <cuda.h>
 #include <iostream>
 #define BLOCK_SIZE 32
-#define N 8192
+#define N 6000000
 // This is the kernal
 __global__ void reduceKernal(float* d_I, float*d_O) {
     // The ID for the thread selected (Including block dimensions).

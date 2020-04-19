@@ -78,10 +78,15 @@
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <CudaCompile Include="cuda3.cu" />
+    <CudaCompile Include="histogram.cu" />
+    <CudaCompile Include="histogram_shared.cu" />
     <CudaCompile Include="Matrix1.cu" />
     <CudaCompile Include="Matrix2.cu" />
     <CudaCompile Include="Reduce.cu" />
     <CudaCompile Include="scan.cu" />
+    <CudaCompile Include="scan2.cu" />
+    <CudaCompile Include="test.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
